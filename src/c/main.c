@@ -3,30 +3,36 @@
    File   : main.c
    Author : Afonso Santos, Portugal
 
-   Last revision: 09h45 August 22 2016
+   Last revision: 19h10 August 29 2016
 */
 
 #include <pebble.h>
-#include <fastmath/FastMath.h>
-#include <r3/R3.h>
-#include <interpolator/Interpolator.h>
-#include <cam3d/Cam3D.h>
-#include <transformr3/TransformR3.h>
-#include <sampler/Sampler.h>
-#include <clock3d/Clock3D.h>
+#include <karambola/FastMath.h>
+#include <karambola/R3.h>
+#include <karambola/Interpolator.h>
+#include <karambola/CamR3.h>
+#include <karambola/TransformR3.h>
+#include <karambola/Sampler.h>
+#include <karambola/Clock3D.h>
 
 #include "Config.h"
 
+// Obstruction related.
+GSize available_screen ;
+
 
 // UI related
-static Window         *window ;
-static Layer          *world_layer ;
-static ActionBarLayer *action_bar;
+static Window         *s_window ;
+static Layer          *s_window_layer ;
+static Layer          *s_world_layer ;
+static ActionBarLayer *s_action_bar;
 
 
 // World related
 #define ACCEL_SAMPLER_CAPACITY    8
 #define WORLD_UPDATE_INTERVAL_MS  35
+
+static Clock3D s_clock ;  // The main/only world object.
 
 typedef enum { WORLD_MODE_UNDEFINED
              , WORLD_MODE_DYNAMIC
@@ -39,9 +45,9 @@ WorldMode ;
 #define ANIMATION_FLIP_STEPS      50
 #define ANIMATION_SPIN_STEPS      75
 
-static int        world_updateCount   = 0 ;
-static WorldMode  world_mode          = WORLD_MODE_UNDEFINED ;
-static AppTimer  *world_updateTimer   = NULL ;
+static int        s_world_updateCount       = 0 ;
+static WorldMode  s_world_mode              = WORLD_MODE_UNDEFINED ;
+static AppTimer  *s_world_updateTimer_ptr   = NULL ;
 
 Sampler   *sampler_accelX = NULL ;            // To be allocated at world_initialize( ).
 Sampler   *sampler_accelY = NULL ;            // To be allocated at world_initialize( ).
@@ -56,8 +62,8 @@ float     *animTranslationFraction = NULL ;   // To be allocated at world_initia
 #define PKEY_WORLD_MODE            1
 #define PKEY_TRANSPARENCY_MODE     2
 
-#define WORLD_MODE_DEFAULT           WORLD_MODE_DYNAMIC
-#define MESH3D_TRANSPARENCY_DEFAULT  MESH3D_TRANSPARENCY_SOLID
+#define WORLD_MODE_DEFAULT         WORLD_MODE_DYNAMIC
+#define MESH_TRANSPARENCY_DEFAULT  MESH_TRANSPARENCY_SOLID
 
 
 // APP run mode related.
@@ -67,26 +73,25 @@ Blinker   clock_minutes_inkBlinker ;
 // User related
 #define USER_SECONDSINACTIVE_MAX       90
 
-static uint8_t user_secondsInactive  = 0 ;
+static uint8_t s_user_secondsInactive  = 0 ;
 
 
 // Spin(Z) CONSTANTS & variables
 #define        SPIN_ROTATION_QUANTA   0.0001
 #define        SPIN_ROTATION_STEADY  -DEG_045
-//DEBUG #define        SPIN_ROTATION_STEADY     DEG_135
 #define        SPIN_SPEED_BUTTON_STEP 20
 #define        SPIN_SPEED_PUNCH_STEP  1000
 
-static int     spin_speed     = 0 ;                      // Initial spin speed.
-static float   spin_rotation  = SPIN_ROTATION_STEADY ;   // Initial spin rotation angle allows to view hours/minutes/seconds faces.
+static int     s_spin_speed     = 0 ;                      // Initial spin speed.
+static float   s_spin_rotation  = SPIN_ROTATION_STEADY ;   // Initial spin rotation angle allows to view hours/minutes/seconds faces.
 
 
 // Camera related
 #define  CAM3D_DISTANCEFROMORIGIN    (2.2 * CUBE_SIZE)
 
-static Cam3D                     cam ;
-static float                     cam_zoom           = PBL_IF_RECT_ELSE(1.25, 1.15) ;
-static Mesh3D_TransparencyMode   transparencyMode   = MESH3D_TRANSPARENCY_SOLID ;   // To be loaded/initialized from persistent storage.
+static CamR3             s_cam ;
+static float             s_cam_zoom           = PBL_IF_RECT_ELSE(1.25f, 1.15f) ;
+static MeshTransparency  s_transparencyMode   = MESH_TRANSPARENCY_SOLID ;   // To be loaded/initialized from persistent storage.
 
 
 // Button click handlers
@@ -96,8 +101,8 @@ spinSpeed_increment_click_handler
 , void              *context
 )
 {
-  user_secondsInactive = 0 ;
-  spin_speed += SPIN_SPEED_BUTTON_STEP ;
+  s_user_secondsInactive = 0 ;
+  s_spin_speed += SPIN_SPEED_BUTTON_STEP ;
 }
 
 
@@ -107,8 +112,8 @@ spinSpeed_decrement_click_handler
 , void              *context
 )
 {
-  user_secondsInactive = 0 ;
-  spin_speed -= SPIN_SPEED_BUTTON_STEP ;
+  s_user_secondsInactive = 0 ;
+  s_spin_speed -= SPIN_SPEED_BUTTON_STEP ;
 }
 
 
@@ -118,22 +123,22 @@ transparencyMode_change_click_handler
 , void              *context
 )
 {
-  user_secondsInactive = 0 ;
+  s_user_secondsInactive = 0 ;
 
   // Cycle trough the transparency modes.
-  switch (transparencyMode)
+  switch (s_transparencyMode)
   {
-    case MESH3D_TRANSPARENCY_SOLID:
-     transparencyMode = MESH3D_TRANSPARENCY_XRAY ;
+    case MESH_TRANSPARENCY_SOLID:
+     s_transparencyMode = MESH_TRANSPARENCY_XRAY ;
      break ;
 
-   case MESH3D_TRANSPARENCY_XRAY:
-     transparencyMode = MESH3D_TRANSPARENCY_WIREFRAME ;
+   case MESH_TRANSPARENCY_XRAY:
+     s_transparencyMode = MESH_TRANSPARENCY_WIREFRAME ;
      break ;
 
-   case MESH3D_TRANSPARENCY_WIREFRAME:
+   case MESH_TRANSPARENCY_WIREFRAME:
    default:
-     transparencyMode = MESH3D_TRANSPARENCY_SOLID ;
+     s_transparencyMode = MESH_TRANSPARENCY_SOLID ;
      break ;
   } ;
 }
@@ -145,8 +150,8 @@ displayType_cycle_click_handler
 , void              *context
 )
 {
-  user_secondsInactive = 0 ;
-  Clock3D_cycleDisplayType( ) ;
+  s_user_secondsInactive = 0 ;
+  Clock3D_cycleDigitType( &s_clock ) ;
 }
 
 
@@ -160,24 +165,24 @@ configMode_enter_click_handler
 , void              *context
 )
 {
-  user_secondsInactive = 0 ;
+  s_user_secondsInactive = 0 ;
 
-  clock_days_leftDigitA          ->mesh->inkBlinker
-  = clock_days_leftDigitB        ->mesh->inkBlinker
-  = clock_days_rightDigitA       ->mesh->inkBlinker
-  = clock_days_rightDigitB       ->mesh->inkBlinker
-  = clock_hours_leftDigitA       ->mesh->inkBlinker
-  = clock_hours_leftDigitB       ->mesh->inkBlinker
-  = clock_hours_rightDigitA      ->mesh->inkBlinker
-  = clock_hours_rightDigitB      ->mesh->inkBlinker
-  = clock_minutes_leftDigitA     ->mesh->inkBlinker
-  = clock_minutes_leftDigitB     ->mesh->inkBlinker
-  = clock_minutes_rightDigitA    ->mesh->inkBlinker
-  = clock_minutes_rightDigitB    ->mesh->inkBlinker
-  = clock_seconds_leftDigit      ->mesh->inkBlinker
-  = clock_seconds_rightDigit     ->mesh->inkBlinker
-  = clock_second100ths_leftDigit ->mesh->inkBlinker
-  = clock_second100ths_rightDigit->mesh->inkBlinker
+  s_clock.days_leftDigitA          ->mesh->inkBlinker
+  = s_clock.days_leftDigitB        ->mesh->inkBlinker
+  = s_clock.days_rightDigitA       ->mesh->inkBlinker
+  = s_clock.days_rightDigitB       ->mesh->inkBlinker
+  = s_clock.hours_leftDigitA       ->mesh->inkBlinker
+  = s_clock.hours_leftDigitB       ->mesh->inkBlinker
+  = s_clock.hours_rightDigitA      ->mesh->inkBlinker
+  = s_clock.hours_rightDigitB      ->mesh->inkBlinker
+  = s_clock.minutes_leftDigitA     ->mesh->inkBlinker
+  = s_clock.minutes_leftDigitB     ->mesh->inkBlinker
+  = s_clock.minutes_rightDigitA    ->mesh->inkBlinker
+  = s_clock.minutes_rightDigitB    ->mesh->inkBlinker
+  = s_clock.seconds_leftDigit      ->mesh->inkBlinker
+  = s_clock.seconds_rightDigit     ->mesh->inkBlinker
+  = s_clock.second100ths_leftDigit ->mesh->inkBlinker
+  = s_clock.second100ths_rightDigit->mesh->inkBlinker
   = Blinker_start( &configMode_inkBlinker
                  , 250      // lengthOn (ms)
                  , 250      // lengthOff (ms)
@@ -186,7 +191,7 @@ configMode_enter_click_handler
                  )
   ;
 
-  action_bar_layer_set_click_config_provider( action_bar, configMode_click_config_provider ) ;
+  action_bar_layer_set_click_config_provider( s_action_bar, configMode_click_config_provider ) ;
 }
 
 
@@ -196,32 +201,32 @@ configMode_exit_click_handler
 , void              *context
 )
 {
-  user_secondsInactive = 0 ;
+  s_user_secondsInactive = 0 ;
 
-  clock_days_leftDigitA          ->mesh->inkBlinker
-  = clock_days_leftDigitB        ->mesh->inkBlinker
-  = clock_days_rightDigitA       ->mesh->inkBlinker
-  = clock_days_rightDigitB       ->mesh->inkBlinker
-  = clock_hours_leftDigitA       ->mesh->inkBlinker
-  = clock_hours_leftDigitB       ->mesh->inkBlinker
-  = clock_hours_rightDigitA      ->mesh->inkBlinker
-  = clock_hours_rightDigitB      ->mesh->inkBlinker
-  = clock_seconds_leftDigit      ->mesh->inkBlinker
-  = clock_seconds_rightDigit     ->mesh->inkBlinker
-  = clock_second100ths_leftDigit ->mesh->inkBlinker
-  = clock_second100ths_rightDigit->mesh->inkBlinker
+  s_clock.days_leftDigitA          ->mesh->inkBlinker
+  = s_clock.days_leftDigitB        ->mesh->inkBlinker
+  = s_clock.days_rightDigitA       ->mesh->inkBlinker
+  = s_clock.days_rightDigitB       ->mesh->inkBlinker
+  = s_clock.hours_leftDigitA       ->mesh->inkBlinker
+  = s_clock.hours_leftDigitB       ->mesh->inkBlinker
+  = s_clock.hours_rightDigitA      ->mesh->inkBlinker
+  = s_clock.hours_rightDigitB      ->mesh->inkBlinker
+  = s_clock.seconds_leftDigit      ->mesh->inkBlinker
+  = s_clock.seconds_rightDigit     ->mesh->inkBlinker
+  = s_clock.second100ths_leftDigit ->mesh->inkBlinker
+  = s_clock.second100ths_rightDigit->mesh->inkBlinker
   = NULL
   ;
 
-  clock_minutes_leftDigitA       ->mesh->inkBlinker
-  = clock_minutes_leftDigitB     ->mesh->inkBlinker
-  = clock_minutes_rightDigitA    ->mesh->inkBlinker
-  = clock_minutes_rightDigitB    ->mesh->inkBlinker
+  s_clock.minutes_leftDigitA       ->mesh->inkBlinker
+  = s_clock.minutes_leftDigitB     ->mesh->inkBlinker
+  = s_clock.minutes_rightDigitA    ->mesh->inkBlinker
+  = s_clock.minutes_rightDigitB    ->mesh->inkBlinker
   = &clock_minutes_inkBlinker
   ;
 
   Blinker_stop( &configMode_inkBlinker ) ;
-  action_bar_layer_set_click_config_provider( action_bar, normalMode_click_config_provider ) ;
+  action_bar_layer_set_click_config_provider( s_action_bar, normalMode_click_config_provider ) ;
 }
 
 
@@ -288,7 +293,7 @@ accel_tap_service_handler
 , int32_t        direction   // Direction is 1 or -1
 )
 {
-  user_secondsInactive = 0 ;      // Tap event qualifies as active user interaction.
+  s_user_secondsInactive = 0 ;      // Tap event qualifies as active user interaction.
 
   // Forward declaration
   void set_world_mode( uint8_t worldMode ) ;
@@ -296,11 +301,11 @@ accel_tap_service_handler
   switch ( axis )
   {
     case ACCEL_AXIS_X:    // Punch: stop/launch spinning motion.
-      spin_speed += SPIN_SPEED_PUNCH_STEP ;       // Spin faster.
+      s_spin_speed += SPIN_SPEED_PUNCH_STEP ;       // Spin faster.
       break ;
 
     case ACCEL_AXIS_Y:    // Twist: change the world mode.
-      switch( world_mode )
+      switch( s_world_mode )
       { 
          case WORLD_MODE_STEADY:
           set_world_mode( WORLD_MODE_DYNAMIC ) ;
@@ -319,8 +324,8 @@ accel_tap_service_handler
 
     case ACCEL_AXIS_Z:    // Ykes: stop spinning, bring to default spin rotation angle.
     default:
-      spin_speed    = 0 ;                         // Stop spinning motion.
-      spin_rotation = SPIN_ROTATION_STEADY ;      // Spin rotation angle that allows to view days/hours/minutes faces.
+      s_spin_speed    = 0 ;                         // Stop spinning motion.
+      s_spin_rotation = SPIN_ROTATION_STEADY ;      // Spin rotation angle that allows to view days/hours/minutes faces.
       break ;
   }
 }
@@ -338,18 +343,19 @@ tick_timer_service_handler
 , TimeUnits  units_changed
 )
 {
-  if (spin_speed == 0)
-    ++user_secondsInactive ;
+  if (s_spin_speed == 0)
+    ++s_user_secondsInactive ;
 
   // Auto-exit application on lack of user interaction.
-  if (user_secondsInactive > USER_SECONDSINACTIVE_MAX)
+  if (s_user_secondsInactive > USER_SECONDSINACTIVE_MAX)
   {
     world_stop( ) ;
     world_finalize( ) ;
     window_stack_pop_all( true )	;    // Exit app.
   }
 
-  Clock3D_setTime_DDHHMMSS( tick_time->tm_mday   // days
+  Clock3D_setTime_DDHHMMSS( &s_clock
+                          , tick_time->tm_mday   // days
                           , tick_time->tm_hour   // hours
                           , tick_time->tm_min    // minutes
                           , tick_time->tm_sec    // seconds
@@ -364,14 +370,14 @@ cam_config
 )
 {
   // setup 3D camera
-  Cam3D_lookAtOriginUpwards( &cam
+  CamR3_lookAtOriginUpwards( &s_cam
                            , TransformR3_rotateZ( R3_scale( CAM3D_DISTANCEFROMORIGIN    // View point.
                                                           , viewPoint
                                                           )
                                                 , rotationZ
                                                 )
-                           , cam_zoom                                                   // Zoom
-                           , CAM3D_PROJECTION_PERSPECTIVE
+                           , s_cam_zoom                                                   // Zoom
+                           , CAM_PROJECTION_PERSPECTIVE
                            ) ;
 }
 
@@ -380,7 +386,7 @@ void
 set_world_mode
 ( const WorldMode pWorldMode )
 { // Clean-up exiting mode. Unsubscribe from no longer needed services.
-  switch ( world_mode )
+  switch ( s_world_mode )
   {
     case WORLD_MODE_DYNAMIC:
     	accel_data_service_unsubscribe( ) ;
@@ -393,11 +399,11 @@ set_world_mode
   }
 
   // Start-up entering mode. Subscribe to newly needed services. Apply relevant configurations.
-  switch ( world_mode = pWorldMode )
+  switch ( s_world_mode = pWorldMode )
   {
     case WORLD_MODE_STEADY:
-      spin_speed    = 0 ;                                  // Stop spinning motion.
-      spin_rotation = SPIN_ROTATION_STEADY ;               // Spin rotation angle that allows to view days/hours/minutes faces.
+      s_spin_speed    = 0 ;                                  // Stop spinning motion.
+      s_spin_rotation = SPIN_ROTATION_STEADY ;               // Spin rotation angle that allows to view days/hours/minutes faces.
       break ;
 
     case WORLD_MODE_DYNAMIC:
@@ -452,21 +458,21 @@ void
 world_initialize
 ( )
 { // Get previous configuration from persistent storage if it exists, otherwise use the defaults.
-  world_mode       = persist_exists(PKEY_WORLD_MODE)        ? persist_read_int(PKEY_WORLD_MODE)        : WORLD_MODE_DEFAULT ;
-  transparencyMode = persist_exists(PKEY_TRANSPARENCY_MODE) ? persist_read_int(PKEY_TRANSPARENCY_MODE) : MESH3D_TRANSPARENCY_DEFAULT ;
+  s_world_mode       = persist_exists(PKEY_WORLD_MODE)        ? persist_read_int(PKEY_WORLD_MODE)        : WORLD_MODE_DEFAULT ;
+  s_transparencyMode = persist_exists(PKEY_TRANSPARENCY_MODE) ? persist_read_int(PKEY_TRANSPARENCY_MODE) : MESH_TRANSPARENCY_DEFAULT ;
 
-  Clock3D_initialize( ) ;
+  Clock3D_initialize( &s_clock ) ;
 
-  clock_minutes_leftDigitA    ->mesh->inkBlinker
-  = clock_minutes_leftDigitB  ->mesh->inkBlinker
-  = clock_minutes_rightDigitA ->mesh->inkBlinker
-  = clock_minutes_rightDigitB ->mesh->inkBlinker
+  s_clock.minutes_leftDigitA    ->mesh->inkBlinker
+  = s_clock.minutes_leftDigitB  ->mesh->inkBlinker
+  = s_clock.minutes_rightDigitA ->mesh->inkBlinker
+  = s_clock.minutes_rightDigitB ->mesh->inkBlinker
   = &clock_minutes_inkBlinker
   ;
 
   sampler_initialize( ) ;
   interpolations_initialize( ) ;
-  Clock3D_config( DIGIT2D_CURVYSKIN ) ;
+  Clock3D_config( &s_clock, DIGIT2D_CURVYSKIN ) ;
 }
 
 
@@ -477,13 +483,13 @@ void
 world_update
 ( )
 {
-  ++world_updateCount ;
+  ++s_world_updateCount ;
 
-  Clock3D_updateAnimation( ANIMATION_FLIP_STEPS ) ;
+  Clock3D_updateAnimation( &s_clock, ANIMATION_FLIP_STEPS ) ;
 
-  if (world_mode != WORLD_MODE_STEADY)
+  if (s_world_mode != WORLD_MODE_STEADY)
   {
-    Clock3D_second100ths_update( ) ;
+    Clock3D_second100ths_update( &s_clock ) ;
 
     AccelData ad ;
 
@@ -517,20 +523,20 @@ world_update
    
     float cam_rotation ;
 
-    switch (world_mode)
+    switch (s_world_mode)
     {
       case WORLD_MODE_DYNAMIC:
         // Friction: gradualy decrease spin speed until it stops.
-        if (spin_speed > 0)
-          --spin_speed ;
+        if (s_spin_speed > 0)
+          --s_spin_speed ;
 
-        if (spin_speed < 0)
-          ++spin_speed ;
+        if (s_spin_speed < 0)
+          ++s_spin_speed ;
 
-        if (spin_speed != 0)
-          spin_rotation = FastMath_normalizeAngle( spin_rotation + (float)spin_speed * SPIN_ROTATION_QUANTA ) ;
+        if (s_spin_speed != 0)
+          s_spin_rotation = FastMath_normalizeAngle( s_spin_rotation + (float)s_spin_speed * SPIN_ROTATION_QUANTA ) ;
 
-        cam_rotation = spin_rotation ;
+        cam_rotation = s_spin_rotation ;
         break ;
 
       case WORLD_MODE_STEADY:
@@ -548,21 +554,28 @@ world_update
   }
 
   // this will queue a defered call to the world_draw( ) method.
-  layer_mark_dirty( world_layer ) ;
+  layer_mark_dirty( s_world_layer ) ;
 }
 
 
-static void
+#ifdef LOG
+static int s_world_draw_count = 0 ;
+#endif
+
+void
 world_draw
 ( Layer    *me
 , GContext *gCtx
 )
 {
-  const GRect layerBounds = layer_get_bounds( me ) ;
-  const uint8_t w = layerBounds.size.w ;
-  const uint8_t h = layerBounds.size.h ;
+  LOGD( "world_draw:: count = %d", ++s_world_draw_count ) ;
 
-  Clock3D_draw( gCtx, &cam, w, h, transparencyMode ) ;
+  // Disable antialiasing if running under QEMU (crashes after a few frames otherwise).
+#ifdef QEMU
+    graphics_context_set_antialiased( gCtx, false ) ;
+#endif
+
+  Clock3D_draw( gCtx, &s_clock, &s_cam, available_screen.w, available_screen.h, s_transparencyMode ) ;
 }
 
 
@@ -592,13 +605,13 @@ void
 world_finalize
 ( )
 {
-  Clock3D_finalize( ) ;
+  Clock3D_finalize( &s_clock ) ;
   sampler_finalize( ) ;
   interpolations_finalize( ) ;
 
   // Save current configuration into persistent storage on app exit.
-  persist_write_int( PKEY_WORLD_MODE       , world_mode       ) ;
-  persist_write_int( PKEY_TRANSPARENCY_MODE, transparencyMode ) ;
+  persist_write_int( PKEY_WORLD_MODE       , s_world_mode       ) ;
+  persist_write_int( PKEY_TRANSPARENCY_MODE, s_transparencyMode ) ;
 }
 
 
@@ -609,14 +622,14 @@ world_update_timer_handler
   world_update( ) ;
 
   // Call me again.
-  world_updateTimer = app_timer_register( WORLD_UPDATE_INTERVAL_MS, world_update_timer_handler, data ) ;
+  s_world_updateTimer_ptr = app_timer_register( WORLD_UPDATE_INTERVAL_MS, world_update_timer_handler, data ) ;
 }
 
 
 void
 world_start
 ( )
-{ // Position clock handles according to current time.
+{ // Position s_clock handles according to current time.
   // Initialize blinkers.
   Blinker_start( &clock_minutes_inkBlinker
                , 500      // lengthOn (ms)
@@ -626,9 +639,9 @@ world_start
                ) ;
 
   // Set initial world mode (and subscribe to related services).
-  set_world_mode( world_mode ) ;                                               
+  set_world_mode( s_world_mode ) ;                                               
 
-  // Activate clock
+  // Activate s_clock
   tick_timer_service_subscribe( SECOND_UNIT, tick_timer_service_handler ) ;    
 
   // Become tap aware.
@@ -646,9 +659,9 @@ world_stop
   Blinker_stop( &clock_minutes_inkBlinker ) ;
 
   // Stop animation.
-  app_timer_cancel( world_updateTimer ) ;
+  app_timer_cancel( s_world_updateTimer_ptr ) ;
 
-  // Stop clock.
+  // Stop s_clock.
   tick_timer_service_unsubscribe( ) ;
 
   // Tap unaware.
@@ -663,31 +676,47 @@ world_stop
 
 
 void
-window_load
-( Window *window )
+unobstructed_area_change_handler
+( AnimationProgress progress
+, void             *context
+)
 {
-  Layer *window_root_layer = window_get_root_layer( window ) ;
+  available_screen = layer_get_unobstructed_bounds( s_window_layer ).size ;
+}
 
-  action_bar = action_bar_layer_create( ) ;
-  action_bar_layer_add_to_window( action_bar, window ) ;
-  action_bar_layer_set_click_config_provider( action_bar, normalMode_click_config_provider ) ;
 
-  GRect bounds = layer_get_frame( window_root_layer ) ;
-  world_layer = layer_create( bounds ) ;
-  layer_set_update_proc( world_layer, world_draw ) ;
-  layer_add_child( window_root_layer, world_layer ) ;
+void
+window_load
+( Window *s_window )
+{
+  s_window_layer    = window_get_root_layer( s_window ) ;
+  available_screen  = layer_get_unobstructed_bounds( s_window_layer ).size ;
 
-  // Position clock handles according to current time, launch blinkers, launch animation, start clock.
+  s_action_bar = action_bar_layer_create( ) ;
+  action_bar_layer_add_to_window( s_action_bar, s_window ) ;
+  action_bar_layer_set_click_config_provider( s_action_bar, normalMode_click_config_provider ) ;
+
+  GRect bounds = layer_get_frame( s_window_layer ) ;
+  s_world_layer = layer_create( bounds ) ;
+  layer_set_update_proc( s_world_layer, world_draw ) ;
+  layer_add_child( s_window_layer, s_world_layer ) ;
+
+  // Obstrution handling.
+  UnobstructedAreaHandlers unobstructed_area_handlers = { .change = unobstructed_area_change_handler } ;
+  unobstructed_area_service_subscribe( unobstructed_area_handlers, NULL ) ;
+
+  // Position s_clock handles according to current time, launch blinkers, launch animation, start s_clock.
   world_start( ) ;
 }
 
 
 void
 window_unload
-( Window *window )
+( Window *s_window )
 {
   world_stop( ) ;
-  layer_destroy( world_layer ) ;
+  unobstructed_area_service_unsubscribe( ) ;
+  layer_destroy( s_world_layer ) ;
 }
 
 
@@ -697,17 +726,17 @@ app_init
 {
   world_initialize( ) ;
 
-  window = window_create( ) ;
-  window_set_background_color( window, GColorBlack ) ;
+  s_window = window_create( ) ;
+  window_set_background_color( s_window, GColorBlack ) ;
  
-  window_set_window_handlers( window
+  window_set_window_handlers( s_window
                             , (WindowHandlers)
                               { .load   = window_load
                               , .unload = window_unload
                               }
                             ) ;
 
-  window_stack_push( window, false ) ;
+  window_stack_push( s_window, false ) ;
 }
 
 
@@ -715,8 +744,8 @@ void
 app_deinit
 ( void )
 {
-  window_stack_remove( window, false ) ;
-  window_destroy( window ) ;
+  window_stack_remove( s_window, false ) ;
+  window_destroy( s_window ) ;
   world_finalize( ) ;
 }
 
