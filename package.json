@@ -1,7 +1,7 @@
 {
     "author": "Karambola",
     "dependencies": {
-        "karambola": "https://builds-beta.cloudpebble.net/fa17c1d1-9d60-4c56-9c83-9b28605b50fa/package.tar.gz"
+        "karambola": "https://builds.cloudpebble.net/fac89119-703a-442e-824e-cbe11610011c/package.tar.gz"
     },
     "keywords": [],
     "name": "flipclock3d",
@@ -17,12 +17,13 @@
         "targetPlatforms": [
             "basalt",
             "chalk",
-            "diorite"
+            "diorite",
+            "emery"
         ],
         "uuid": "5800915c-2d15-4d54-a2a5-b8fe22d67735",
         "watchapp": {
             "watchface": false
         }
     },
-    "version": "4.0.0"
+    "version": "4.2.0"
 }

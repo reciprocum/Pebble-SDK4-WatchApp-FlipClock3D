@@ -1,9 +1,9 @@
 /*
-   Project: FlipClock3D (watchapp)
-   File   : main.c
-   Author : Afonso Santos, Portugal
+   WatchApp: Flip Clock 3D
+   File    : main.c
+   Author  : Afonso Santos, Portugal
 
-   Last revision: 19h10 August 29 2016
+   Last revision: 25 October 2016
 */
 
 #include <pebble.h>
@@ -30,7 +30,6 @@ static ActionBarLayer *s_action_bar;
 
 // World related
 #define ACCEL_SAMPLER_CAPACITY    8
-#define WORLD_UPDATE_INTERVAL_MS  35
 
 static Clock3D s_clock ;  // The main/only world object.
 
@@ -365,20 +364,18 @@ tick_timer_service_handler
 
 void
 cam_config
-( R3         *viewPoint
-, const float rotationZ
+( const R3   *pViewPoint
+, const float pRotZrad
 )
 {
+  R3 scaledVP ;
+  R3_scaTo( &scaledVP, CAM3D_DISTANCEFROMORIGIN, pViewPoint ) ;
+
+  R3 rotatedVP ;
+  R3_rotZrad( &rotatedVP, &scaledVP, pRotZrad ) ;
+
   // setup 3D camera
-  CamR3_lookAtOriginUpwards( &s_cam
-                           , TransformR3_rotateZ( R3_scale( CAM3D_DISTANCEFROMORIGIN    // View point.
-                                                          , viewPoint
-                                                          )
-                                                , rotationZ
-                                                )
-                           , s_cam_zoom                                                   // Zoom
-                           , CAM_PROJECTION_PERSPECTIVE
-                           ) ;
+  CamR3_lookAtOriginUpwards( &s_cam, &rotatedVP, s_cam_zoom, CAM_PROJECTION_PERSPECTIVE ) ;
 }
 
 
@@ -430,9 +427,9 @@ interpolations_initialize
                                    , ANIMATION_FLIP_STEPS
                                    ) ;
 
-  Interpolator_TrigonometricYoYo( animTranslationFraction = malloc((ANIMATION_FLIP_STEPS+1)*sizeof(float))
-                                , ANIMATION_FLIP_STEPS
-                                ) ;
+  Interpolator_SinYoYo( animTranslationFraction = malloc((ANIMATION_FLIP_STEPS+1)*sizeof(float))
+                      , ANIMATION_FLIP_STEPS
+                      ) ;
 }
 
 
@@ -501,7 +498,7 @@ world_update
     }
     else
     {
-#ifdef QEMU
+#if defined(QEMU)
       if (ad.x == 0  &&  ad.y == 0  &&  ad.z == -1000)   // Under QEMU with SENSORS off this is the default output.
       {
         Sampler_push( sampler_accelX,  -81 ) ;
@@ -534,7 +531,7 @@ world_update
           ++s_spin_speed ;
 
         if (s_spin_speed != 0)
-          s_spin_rotation = FastMath_normalizeAngle( s_spin_rotation + (float)s_spin_speed * SPIN_ROTATION_QUANTA ) ;
+          s_spin_rotation = FastMath_normalizeAngleRad( s_spin_rotation + (float)s_spin_speed * SPIN_ROTATION_QUANTA ) ;
 
         cam_rotation = s_spin_rotation ;
         break ;
@@ -558,7 +555,7 @@ world_update
 }
 
 
-#ifdef LOG
+#if defined(LOG)
 static int s_world_draw_count = 0 ;
 #endif
 
@@ -571,7 +568,7 @@ world_draw
   LOGD( "world_draw:: count = %d", ++s_world_draw_count ) ;
 
   // Disable antialiasing if running under QEMU (crashes after a few frames otherwise).
-#ifdef QEMU
+#if defined(QEMU)
     graphics_context_set_antialiased( gCtx, false ) ;
 #endif
 
@@ -595,9 +592,9 @@ void
 sampler_finalize
 ( )
 {
-  free( Sampler_free( sampler_accelX ) ) ; sampler_accelX = NULL ;
-  free( Sampler_free( sampler_accelY ) ) ; sampler_accelY = NULL ;
-  free( Sampler_free( sampler_accelZ ) ) ; sampler_accelZ = NULL ;
+  Sampler_free( sampler_accelX ) ;
+  Sampler_free( sampler_accelY ) ;
+  Sampler_free( sampler_accelZ ) ;
 }
 
 
@@ -622,7 +619,7 @@ world_update_timer_handler
   world_update( ) ;
 
   // Call me again.
-  s_world_updateTimer_ptr = app_timer_register( WORLD_UPDATE_INTERVAL_MS, world_update_timer_handler, data ) ;
+  s_world_updateTimer_ptr = app_timer_register( ANIMATION_INTERVAL_MS, world_update_timer_handler, data ) ;
 }
 
 
@@ -661,7 +658,7 @@ world_stop
   // Stop animation.
   app_timer_cancel( s_world_updateTimer_ptr ) ;
 
-  // Stop s_clock.
+  // Stop clock.
   tick_timer_service_unsubscribe( ) ;
 
   // Tap unaware.

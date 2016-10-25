@@ -1,9 +1,9 @@
 /*
-   Project: FlipClock3D (watchapp)
-   File   : Config.h
-   Author : Afonso Santos, Portugal
+   WatchApp: Flip Clock 3D
+   File    : Config.h
+   Author  : Afonso Santos, Portugal
 
-   Last revision: 17h54 August 25 2016
+   Last revision: 25 October 2016
 */
 
 #pragma once
@@ -17,7 +17,7 @@
 // Uncoment next line to "fake" running on APLITE/DIORITE B&W platforms.
 //#undef PBL_COLOR
 
-#ifdef LOG
+#if defined(LOG)
   #define LOGD(fmt, ...) APP_LOG(APP_LOG_LEVEL_DEBUG, fmt, ##__VA_ARGS__)
   #define LOGI(fmt, ...) APP_LOG(APP_LOG_LEVEL_INFO, fmt, ##__VA_ARGS__)
   #define LOGW(fmt, ...) APP_LOG(APP_LOG_LEVEL_WARNING, fmt, ##__VA_ARGS__)
